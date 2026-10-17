@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openclaw/wacli/internal/app"
@@ -189,5 +191,67 @@ func TestSendFileStatusPersistsHistory(t *testing.T) {
 	}
 	if _, err := db.GetStatusMessage("MSG1"); err != nil {
 		t.Fatalf("status message not persisted: %v", err)
+	}
+}
+
+// streamSendFileWA records which upload path sendFile chose.
+type streamSendFileWA struct {
+	fakeSendFileWA
+	streamed int64
+}
+
+func (f *streamSendFileWA) Upload(context.Context, []byte, whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	return whatsmeow.UploadResponse{}, errors.New("large file must not be buffered")
+}
+
+func (f *streamSendFileWA) UploadReader(_ context.Context, r io.Reader, _ whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	n, err := io.Copy(io.Discard, r)
+	f.streamed = n
+	return whatsmeow.UploadResponse{FileLength: uint64(n)}, err
+}
+
+func TestSendFileStreamsLargeFile(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "wacli.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	filePath := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(filePath, nil, 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.Truncate(filePath, maxSendFileSize+1); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	fake := &streamSendFileWA{fakeSendFileWA: fakeSendFileWA{sentID: "BIG1"}}
+	a := &fakeSendFileApp{wa: fake, db: db}
+	to := types.NewJID("15550000001", types.DefaultUserServer)
+
+	res, err := sendFile(context.Background(), a, to, filePath, sendFileOptions{mediaAs: "document"})
+	if err != nil || res.id != "BIG1" {
+		t.Fatalf("sendFile = %+v, %v", res, err)
+	}
+	if fake.streamed != maxSendFileSize+1 {
+		t.Fatalf("streamed %d bytes, want %d", fake.streamed, maxSendFileSize+1)
+	}
+}
+
+func TestSendFileRejectsLargeInlineImage(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "wacli.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	filePath := filepath.Join(t.TempDir(), "huge.png")
+	if err := os.WriteFile(filePath, nil, 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.Truncate(filePath, maxSendFileSize+1); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	a := &fakeSendFileApp{wa: &streamSendFileWA{}, db: db}
+	_, err = sendFile(context.Background(), a, types.NewJID("15550000001", types.DefaultUserServer), filePath, sendFileOptions{})
+	if err == nil || !strings.Contains(err.Error(), "--as document") {
+		t.Fatalf("expected --as document hint, got %v", err)
 	}
 }

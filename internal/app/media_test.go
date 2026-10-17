@@ -91,3 +91,43 @@ func TestDownloadMediaJobMarksDownloaded(t *testing.T) {
 		t.Fatalf("expected downloaded file to exist: %v", err)
 	}
 }
+
+func TestDownloadMediaJobSkipsMediaOverBackgroundCap(t *testing.T) {
+	a := newTestApp(t)
+	f := newFakeWA()
+	a.wa = f
+
+	chat := "123@s.whatsapp.net"
+	if err := a.db.UpsertChat(chat, "dm", "Alice", time.Now()); err != nil {
+		t.Fatalf("UpsertChat: %v", err)
+	}
+	if err := a.db.UpsertMessage(store.UpsertMessageParams{
+		ChatJID:       chat,
+		MsgID:         "big",
+		SenderJID:     chat,
+		SenderName:    "Alice",
+		Timestamp:     time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC),
+		MediaType:     "document",
+		Filename:      "big.mp4",
+		MimeType:      "video/mp4",
+		DirectPath:    "/direct/path",
+		MediaKey:      []byte{1, 2, 3},
+		FileSHA256:    []byte{4, 5},
+		FileEncSHA256: []byte{6, 7},
+		FileLength:    MaxBackgroundMediaDownloadSize + 1,
+	}); err != nil {
+		t.Fatalf("UpsertMessage: %v", err)
+	}
+
+	downloaded, err := a.downloadMediaJob(context.Background(), mediaJob{chatJID: chat, msgID: "big"})
+	if err != nil || downloaded {
+		t.Fatalf("downloadMediaJob = %v, %v; want false, nil", downloaded, err)
+	}
+	info, err := a.db.GetMediaDownloadInfo(chat, "big")
+	if err != nil {
+		t.Fatalf("GetMediaDownloadInfo: %v", err)
+	}
+	if info.LocalPath != "" {
+		t.Fatalf("background job downloaded oversized media to %q", info.LocalPath)
+	}
+}

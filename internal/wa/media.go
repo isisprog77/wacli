@@ -21,7 +21,13 @@ import (
 	"go.mau.fi/whatsmeow/util/hkdfutil"
 )
 
-const MaxMediaDownloadSize = 100 * 1024 * 1024
+// MaxMediaDownloadSize matches WhatsApp's own 2 GiB attachment limit. The
+// streaming path (DownloadMediaToFile) writes to disk and keeps memory flat.
+const MaxMediaDownloadSize = 2 * 1024 * 1024 * 1024
+
+// MaxDirectMediaDownloadSize bounds DownloadMediaDirectToFile, which holds the
+// ciphertext and plaintext in memory.
+const MaxDirectMediaDownloadSize = 100 * 1024 * 1024
 
 var directMediaBaseURL = "https://mmg.whatsapp.net"
 
@@ -149,16 +155,16 @@ func DownloadMediaDirectToFile(ctx context.Context, directPath string, encFileHa
 	if err != nil {
 		return 0, err
 	}
-	if _, err := mediaDownloadLength(fileLength); err != nil {
-		return 0, err
+	if fileLength > MaxDirectMediaDownloadSize {
+		return 0, fmt.Errorf("media too large (%d bytes); maximum direct download size is %d bytes", fileLength, MaxDirectMediaDownloadSize)
 	}
 
 	plaintext, err := downloadAndDecryptDirect(ctx, mediaURL, encFileHash, fileHash, mediaKey, fileLength, mt)
 	if err != nil {
 		return 0, err
 	}
-	if len(plaintext) > MaxMediaDownloadSize {
-		return 0, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+	if len(plaintext) > MaxDirectMediaDownloadSize {
+		return 0, fmt.Errorf("media too large; maximum download size is %d bytes", MaxDirectMediaDownloadSize)
 	}
 	if err := fsutil.EnsureWritableDir(filepath.Dir(targetPath)); err != nil {
 		return 0, fmt.Errorf("create output dir: %w", err)
@@ -245,8 +251,8 @@ func downloadAndDecryptDirect(ctx context.Context, mediaURL string, encFileHash,
 	if len(encrypted) <= mediaHMACLength {
 		return nil, whatsmeow.ErrTooShortFile
 	}
-	if len(encrypted) > MaxMediaDownloadSize+maxEncryptedMediaDownloadOverhead {
-		return nil, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+	if len(encrypted) > MaxDirectMediaDownloadSize+maxEncryptedMediaDownloadOverhead {
+		return nil, fmt.Errorf("media too large; maximum download size is %d bytes", MaxDirectMediaDownloadSize)
 	}
 	if len(encFileHash) == sha256.Size {
 		sum := sha256.Sum256(encrypted)
@@ -292,12 +298,12 @@ func downloadDirectBytes(ctx context.Context, mediaURL string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, whatsmeow.DownloadHTTPError{Response: resp}
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxMediaDownloadSize+maxEncryptedMediaDownloadOverhead+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxDirectMediaDownloadSize+maxEncryptedMediaDownloadOverhead+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > MaxMediaDownloadSize+maxEncryptedMediaDownloadOverhead {
-		return nil, fmt.Errorf("media too large; maximum download size is %d bytes", MaxMediaDownloadSize)
+	if len(body) > MaxDirectMediaDownloadSize+maxEncryptedMediaDownloadOverhead {
+		return nil, fmt.Errorf("media too large; maximum download size is %d bytes", MaxDirectMediaDownloadSize)
 	}
 	return body, nil
 }

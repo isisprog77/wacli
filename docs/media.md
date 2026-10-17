@@ -38,7 +38,8 @@ recovery response, check the exact local file before requesting recovery again.
 ### Notes
 
 - The target message must already be synced.
-- Media downloads are capped at 100 MiB.
+- Media downloads go up to 2 GiB (WhatsApp's limit) and stream to disk, so memory stays flat. Downloads that recover media re-uploaded by the phone (`--retry-on-phone`) are held in memory and stay capped at 100 MiB.
+- Background downloads (`sync --download-media`, `media backfill`) skip files over 100 MiB; fetch those explicitly with `media download`.
 - `--output` may be a file path or directory.
 - If `--output` is omitted, media is written under the store media directory.
 - `--read-only` is supported only with explicit `--output`; it writes the file without opening the WhatsApp session store or recording `local_path` / `downloaded_at`.

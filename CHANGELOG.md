@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.0-isis.1 (fork isisprog77/wacli)
+
+- Media: raise send-file and `media download` limits from 100 MiB to WhatsApp's 2 GiB. Files over 100 MiB upload through whatsmeow's streaming encryptor (temp file, flat memory); downloads already streamed to disk.
+- Media: keep the 100 MiB cap for unattended downloads (`sync --download-media`, `media backfill`) and for the in-memory phone re-upload recovery path.
+- Release: build darwin (macOS 12+) and linux binaries in GitHub Actions (`fork-release.yml`).
+
 ## Unreleased
 
 ## 0.22.0 - 2026-10-16

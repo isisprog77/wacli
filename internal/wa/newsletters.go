@@ -3,6 +3,7 @@ package wa
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"go.mau.fi/whatsmeow"
@@ -67,6 +68,16 @@ func (c *Client) UploadNewsletter(ctx context.Context, data []byte, mediaType wh
 		return whatsmeow.UploadResponse{}, fmt.Errorf("not connected")
 	}
 	return cli.UploadNewsletter(ctx, data, mediaType)
+}
+
+func (c *Client) UploadNewsletterReader(ctx context.Context, r io.ReadSeeker, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return whatsmeow.UploadResponse{}, fmt.Errorf("not connected")
+	}
+	return cli.UploadNewsletterReader(ctx, r, mediaType)
 }
 
 func NewsletterName(meta *types.NewsletterMetadata) string {

@@ -291,6 +291,7 @@ func TestDownloadRetriedMediaAuthenticatesReupload(t *testing.T) {
 		{name: "missing key", fileHash: hash},
 		{name: "short key", fileHash: hash, mediaKey: []byte{1}},
 		{name: "oversized", fileHash: hash, mediaKey: key, length: MaxMediaDownloadSize + 1},
+		{name: "over in-memory cap", fileHash: hash, mediaKey: key, length: MaxDirectMediaDownloadSize + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			served = encrypted

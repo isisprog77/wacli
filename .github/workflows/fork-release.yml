@@ -1,0 +1,108 @@
+name: Fork release
+
+# Builds the isisprog77 fork: tests, then darwin/linux binaries attached to a
+# GitHub release with checksums.txt. Trigger by pushing a tag like v0.22.0-isis.1.
+
+on:
+  push:
+    tags: ["v*-isis.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - name: go test
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -Wno-error=missing-braces
+        run: go test -tags sqlite_fts5 ./...
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "$TAG" --verify-tag \
+              --notes "Fork of openclaw/wacli: media up to 2 GiB (streamed). Built by GitHub Actions from ${{ github.sha }}."
+
+  build:
+    needs: release
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - os: darwin
+            arch: amd64
+            runner: macos-latest
+          - os: darwin
+            arch: arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -Wno-error=missing-braces
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          # macOS 12 is the oldest host this fork runs on.
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: |
+          if [ "${{ matrix.os }}" = darwin ]; then
+            export CC="clang -arch $([ "${{ matrix.arch }}" = amd64 ] && echo x86_64 || echo arm64)"
+          fi
+          version=${TAG#v}
+          mkdir -p dist
+          go build -trimpath -tags sqlite_fts5 \
+            -ldflags "-s -w -X main.version=$version" \
+            -o dist/wacli ./cmd/wacli
+          cp LICENSE README.md dist/
+          asset="wacli_${version}_${{ matrix.os }}_${{ matrix.arch }}.tar.gz"
+          tar -C dist -czf "$asset" wacli LICENSE README.md
+          if command -v sha256sum >/dev/null; then sha256sum "$asset"; else shasum -a 256 "$asset"; fi > "$asset.sha256"
+          gh release upload "$TAG" "$asset" "$asset.sha256" -R "$GITHUB_REPOSITORY" --clobber
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish checksums.txt
+        run: |
+          mkdir sums && cd sums
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*.sha256'
+          cat *.sha256 | sort -k2 > checksums.txt
+          cat checksums.txt
+          gh release upload "$TAG" checksums.txt -R "$GITHUB_REPOSITORY" --clobber
+          for f in *.sha256; do gh release delete-asset "$TAG" "$f" -R "$GITHUB_REPOSITORY" -y; done

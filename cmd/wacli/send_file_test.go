@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -496,5 +497,51 @@ func TestAttachSendFileReplyContext(t *testing.T) {
 				t.Fatalf("context info was not attached")
 			}
 		})
+	}
+}
+
+func TestOpenSendFileKeepsSmallFilesInMemory(t *testing.T) {
+	path := t.TempDir() + "/small.txt"
+	if err := fsutil.WritePrivateFile(path, []byte("hello")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	data, stream, err := openSendFile(path)
+	if err != nil || stream != nil || string(data) != "hello" {
+		t.Fatalf("openSendFile = %q, %v, %v", data, stream, err)
+	}
+}
+
+func TestOpenSendFileStreamsLargeFile(t *testing.T) {
+	path := t.TempDir() + "/large.bin"
+	if err := fsutil.WritePrivateFile(path, nil); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Truncate(path, maxSendFileSize+1); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	data, stream, err := openSendFile(path)
+	if err != nil || stream == nil {
+		t.Fatalf("openSendFile stream=%v err=%v", stream, err)
+	}
+	defer stream.Close()
+	if len(data) != 512 {
+		t.Fatalf("sniff prefix = %d bytes, want 512", len(data))
+	}
+	if off, err := stream.Seek(0, io.SeekCurrent); err != nil || off != 0 {
+		t.Fatalf("stream offset = %d, %v; want 0", off, err)
+	}
+}
+
+func TestOpenSendFileRejectsOverWhatsAppLimit(t *testing.T) {
+	path := t.TempDir() + "/huge.bin"
+	if err := fsutil.WritePrivateFile(path, nil); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Truncate(path, maxStreamSendFileSize+1); err != nil {
+		t.Fatalf("Truncate: %v", err)
+	}
+	_, stream, err := openSendFile(path)
+	if err == nil || stream != nil || !strings.Contains(err.Error(), "file too large") {
+		t.Fatalf("expected file too large error, got stream=%v err=%v", stream, err)
 	}
 }

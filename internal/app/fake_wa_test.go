@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -620,6 +621,14 @@ func (f *fakeWA) Upload(ctx context.Context, data []byte, mediaType whatsmeow.Me
 }
 
 func (f *fakeWA) UploadNewsletter(ctx context.Context, data []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	return whatsmeow.UploadResponse{Handle: "newsletter-media-handle"}, nil
+}
+
+func (f *fakeWA) UploadReader(ctx context.Context, r io.Reader, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	return whatsmeow.UploadResponse{}, nil
+}
+
+func (f *fakeWA) UploadNewsletterReader(ctx context.Context, r io.ReadSeeker, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
 	return whatsmeow.UploadResponse{Handle: "newsletter-media-handle"}, nil
 }
 

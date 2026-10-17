@@ -3,6 +3,7 @@ package wa
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"go.mau.fi/whatsmeow"
@@ -142,4 +143,16 @@ func (c *Client) Upload(ctx context.Context, data []byte, mediaType whatsmeow.Me
 		return whatsmeow.UploadResponse{}, fmt.Errorf("not connected")
 	}
 	return cli.Upload(ctx, data, mediaType)
+}
+
+// UploadReader encrypts r through a temporary file instead of memory, so large
+// attachments upload with flat memory use.
+func (c *Client) UploadReader(ctx context.Context, r io.Reader, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	c.mu.Lock()
+	cli := c.client
+	c.mu.Unlock()
+	if cli == nil || !cli.IsConnected() {
+		return whatsmeow.UploadResponse{}, fmt.Errorf("not connected")
+	}
+	return cli.UploadReader(ctx, r, nil, mediaType)
 }

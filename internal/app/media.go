@@ -16,6 +16,9 @@ import (
 	"github.com/openclaw/wacli/internal/store"
 )
 
+// MaxBackgroundMediaDownloadSize caps media fetched by sync --download-media.
+const MaxBackgroundMediaDownloadSize = 100 * 1024 * 1024
+
 type mediaJob struct {
 	chatJID string
 	msgID   string
@@ -236,6 +239,11 @@ func (a *App) downloadMediaJob(ctx context.Context, job mediaJob) (downloaded bo
 		return false, nil
 	}
 	if strings.TrimSpace(info.MediaType) == "" || strings.TrimSpace(info.DirectPath) == "" || len(info.MediaKey) == 0 {
+		return false, nil
+	}
+	// Anyone can send media; keep unattended downloads small. Larger files are
+	// fetched explicitly with `wacli media download`.
+	if info.FileLength > MaxBackgroundMediaDownloadSize {
 		return false, nil
 	}
 

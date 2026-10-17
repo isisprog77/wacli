@@ -16,6 +16,7 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -31,7 +32,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Files up to maxSendFileSize are read into memory (thumbnails, sniffing);
+// larger ones up to WhatsApp's 2 GiB limit are encrypted and uploaded as a stream.
 const maxSendFileSize = 100 * 1024 * 1024
+const maxStreamSendFileSize = 2 * 1024 * 1024 * 1024
 const imageThumbnailMaxDimension = 96
 const imageThumbnailMaxPixels = 40_000_000
 const voiceWaveformSamples = 64
@@ -77,9 +81,12 @@ func sendFile(ctx context.Context, a interface {
 	}
 	opts.mediaAs = mediaAs
 
-	data, err := readSendFileData(filePath)
+	data, stream, err := openSendFile(filePath)
 	if err != nil {
 		return sendFileOutcome{}, err
+	}
+	if stream != nil {
+		defer stream.Close()
 	}
 
 	name := strings.TrimSpace(opts.filename)
@@ -95,6 +102,9 @@ func sendFile(ctx context.Context, a interface {
 	if err != nil {
 		return sendFileOutcome{}, err
 	}
+	if stream != nil && mediaType == "image" {
+		return sendFileOutcome{}, fmt.Errorf("images over %d bytes must be sent with --as document", maxSendFileSize)
+	}
 
 	isNewsletter := to.Server == types.NewsletterServer
 	if isNewsletter && opts.ptt {
@@ -105,9 +115,14 @@ func sendFile(ctx context.Context, a interface {
 	}
 
 	var up whatsmeow.UploadResponse
-	if isNewsletter {
+	switch {
+	case stream != nil && isNewsletter:
+		up, err = a.WA().UploadNewsletterReader(ctx, stream, uploadType)
+	case stream != nil:
+		up, err = a.WA().UploadReader(ctx, stream, uploadType)
+	case isNewsletter:
 		up, err = a.WA().UploadNewsletter(ctx, data, uploadType)
-	} else {
+	default:
 		up, err = a.WA().Upload(ctx, data, uploadType)
 	}
 	if err != nil {
@@ -427,6 +442,56 @@ func newAudioMessage(up whatsmeow.UploadResponse, mimeType string, ptt bool, met
 
 func readSendFileData(filePath string) ([]byte, error) {
 	return readRegularFileLimitedWithOpener(filePath, maxSendFileSize, openOutboundMedia)
+}
+
+// openSendFile returns small files in memory with a nil stream. Larger files
+// come back as an open stream positioned at the start, with data holding only
+// a prefix for MIME sniffing.
+func openSendFile(filePath string) ([]byte, *os.File, error) {
+	// Stat before opening so a FIFO or directory cannot block the open.
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("%s is not a regular file", filePath)
+	}
+	if info.Size() <= maxSendFileSize {
+		data, err := readSendFileData(filePath)
+		return data, nil, err
+	}
+	if info.Size() > maxStreamSendFileSize {
+		return nil, nil, fmt.Errorf("file too large (%d bytes); maximum size is %d bytes", info.Size(), maxStreamSendFileSize)
+	}
+
+	f, err := openOutboundMedia(filePath)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err = f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("%s is not a regular file", filePath)
+	}
+	if info.Size() > maxStreamSendFileSize {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("file too large (%d bytes); maximum size is %d bytes", info.Size(), maxStreamSendFileSize)
+	}
+	sniff := make([]byte, 512)
+	n, err := io.ReadFull(f, sniff)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	return sniff[:n], f, nil
 }
 
 func attachSendFileReplyContext(msg *waProto.Message, info *waProto.ContextInfo) {
